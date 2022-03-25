@@ -16,6 +16,7 @@ use near_sdk::{
 use near_sdk::{env, log, near_bindgen, require, AccountId, Balance, BorshStorageKey, Promise};
 use near_sdk::{ext_contract, PromiseResult};
 
+// https://stackoverflow.com/questions/69096013/how-can-i-serialize-a-near-sdk-rs-lookupmap-that-uses-a-string-as-a-key-or-is-t
 #[derive(BorshSerialize, BorshStorageKey)]
 enum StorageKey {
     FungibleToken,
@@ -35,6 +36,7 @@ pub struct Subscription {
     source: AccountId,
     destination: AccountId,
     rate: YoctoPerSecond,
+    timestamp: u64,
 }
 
 #[near_bindgen]
@@ -58,10 +60,13 @@ impl Subscriptions {
         rate: YoctoPerSecond,
     ) -> Subscription {
         self.subscription_index = self.subscription_index.wrapping_add(1);
+        let h = env::sha256(source.as_bytes());
+
         let subscription = Subscription {
             source: source.clone(),
             destination: destination.clone(),
             rate,
+            timestamp: env::block_timestamp(),
         };
         self.subscriptions
             .insert(&self.subscription_index, &subscription);
@@ -248,7 +253,9 @@ impl Paystream {
     }
 
     pub fn subscriptions_by_account(&self) -> Vec<SubscriptionIndex> {
-        self.subscriptions.indices(env::signer_account_id()).unwrap()
+        self.subscriptions
+            .indices(env::signer_account_id())
+            .unwrap()
     }
 
     pub fn get_subscription(&self, subscription_index: SubscriptionIndex) -> Subscription {
@@ -339,6 +346,45 @@ impl Paystream {
     }
 }
 
+impl Paystream {
+    fn current_balance(&self, account_id: AccountId) -> U128 {
+        let mut balance = self.balances.get(&account_id).unwrap_or_default();
+        // All incoming where account is destination
+        let timestamp = env::block_timestamp();
+
+        let yoctos_per_second = |subscription: &Subscription| -> u128 {
+            let difference = timestamp.saturating_sub(subscription.timestamp);
+            (difference as u128).saturating_mul(subscription.rate)
+        };
+
+        self.subscriptions
+            .inputs
+            .get(&account_id)
+            .unwrap_or_default()
+            .iter()
+            .for_each(|subscription_index| {
+                if let Ok(subscription) = self.subscriptions.get(*subscription_index) {
+                    balance = balance.saturating_add(yoctos_per_second(&subscription));
+                }
+            });
+
+        // All outgoing where account is source
+        self.subscriptions
+            .outputs
+            .get(&account_id)
+            .unwrap_or_default()
+            .iter()
+            .for_each(|subscription_index| {
+                if let Ok(subscription) = self.subscriptions.get(*subscription_index) {
+                    // TODO check here the reserve amount??  Maybe it won't matter but to be sure
+                    balance = balance.saturating_sub(yoctos_per_second(&subscription));
+                }
+            });
+
+        balance.into()
+    }
+}
+
 #[near_bindgen]
 impl FungibleTokenCore for Paystream {
     #[payable]
@@ -362,7 +408,7 @@ impl FungibleTokenCore for Paystream {
     }
 
     fn ft_balance_of(&self, account_id: AccountId) -> U128 {
-        self.balances.get(&account_id).unwrap_or_default().into()
+        self.current_balance(account_id)
     }
 }
 
