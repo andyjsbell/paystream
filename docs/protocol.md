@@ -115,7 +115,3 @@ LookupMap<SourceAccountId, Vec<SubscriptionIndex>>
 ```rust
 LookupMap<DestinationAccountId, Vec<SubscriptionId>>
 ```
-
-
-
-#paystream
