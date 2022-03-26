@@ -60,7 +60,7 @@ impl Subscriptions {
         rate: YoctoPerSecond,
     ) -> Subscription {
         self.subscription_index = self.subscription_index.wrapping_add(1);
-        
+
         let subscription = Subscription {
             source: source.clone(),
             destination: destination.clone(),
@@ -132,6 +132,19 @@ impl Subscriptions {
         self.subscriptions
             .get(&subscription_index)
             .ok_or("subscription not present")
+    }
+
+    fn update(
+        &mut self,
+        subscription_index: SubscriptionIndex,
+        new_flow: YoctoPerSecond,
+    ) -> Result<Subscription, &'static str> {
+        let mut subscription = self.get(subscription_index)?;
+        subscription.rate = new_flow;
+        self.subscriptions
+            .insert(&self.subscription_index, &subscription)
+            .ok_or("unable to update subscription")?;
+        Ok(subscription)
     }
 }
 
@@ -259,6 +272,16 @@ impl Paystream {
 
     pub fn get_subscription(&self, subscription_index: SubscriptionIndex) -> Subscription {
         self.subscriptions.get(subscription_index).unwrap()
+    }
+
+    pub fn update_subscription(
+        &mut self,
+        subscription_index: SubscriptionIndex,
+        new_flow: YoctoPerSecond,
+    ) -> Subscription {
+        self.subscriptions
+            .update(subscription_index, new_flow)
+            .unwrap()
     }
 }
 
