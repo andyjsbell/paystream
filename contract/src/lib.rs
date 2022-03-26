@@ -60,8 +60,7 @@ impl Subscriptions {
         rate: YoctoPerSecond,
     ) -> Subscription {
         self.subscription_index = self.subscription_index.wrapping_add(1);
-        let h = env::sha256(source.as_bytes());
-
+        
         let subscription = Subscription {
             source: source.clone(),
             destination: destination.clone(),
