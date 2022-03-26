@@ -2,12 +2,12 @@
 - [ ] Add subscription
 	- [x] Source, destination and rate
 	- [ ] Confirm reserve is sufficient ::assert::
-	- [ ] All subscriptions are outgoing
+	- [x] All subscriptions are outgoing
 	- [x] Increment subscription index by one
 	- [x] Insert subscription into subscription map
 	- [x] Insert into `Outputs` source and append subscription index
 	- [x] Insert into `Inputs` destination and append subscription index
-	- [ ] Add start time to subscription
+	- [x] Add start time to subscription
 	
 ```rust
 fn add_subscription(
@@ -31,10 +31,10 @@ fn remove_subscription(
 );
 ```
 
-- [ ] Calculate balance with subscriptions
-	- [ ] Calculate total of inputs
-	- [ ] Calculate total of outputs
-	- [ ] Calculate net for balance
+- [x] Calculate balance with subscriptions
+	- [x] Calculate total of inputs
+	- [x] Calculate total of outputs
+	- [x] Calculate net for balance
 - [ ] Update subscription
 	- [ ] Update flow only ::assert:: if the same
 	- [ ] Settle based on old flow
@@ -47,8 +47,8 @@ fn update_subscription(
 );
 ```
 
-- [ ] Subscriptions by account
-	- [ ] `AccountId` ::assert::
+- [x] Subscriptions by account
+	- [x] `AccountId` ::assert::
 
 ```rust
 fn subscriptions(
@@ -101,7 +101,8 @@ type YoctoPerSecond = u128;
 Subscription {
   source: SourceAccountId,
   destination: DestinationAccountId,
-	rate: YoctoPerSecond,
+  rate: YoctoPerSecond,
+  timestamp: u128,
 }
 LookupMap<SubscriptionIndex, Subscription> 
 ```
