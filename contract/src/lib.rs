@@ -31,7 +31,7 @@ type SubscriptionIndex = u64;
 type YoctoPerSecond = u128;
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
 pub struct Subscription {
     source: AccountId,
     destination: AccountId,
@@ -70,11 +70,11 @@ impl Subscriptions {
         self.subscriptions
             .insert(&self.subscription_index, &subscription);
 
-        let mut inputs = self.inputs.get(&source).unwrap_or_default();
+        let mut inputs = self.inputs.get(&destination).unwrap_or_default();
         inputs.push(self.subscription_index);
-        self.inputs.insert(&source, &inputs);
+        self.inputs.insert(&destination, &inputs);
 
-        let mut outputs = self.outputs.get(&destination).unwrap_or_default();
+        let mut outputs = self.outputs.get(&source).unwrap_or_default();
         outputs.push(self.subscription_index);
         self.outputs.insert(&source, &outputs);
 
@@ -100,29 +100,24 @@ impl Subscriptions {
             .remove(&subscription_index)
             .ok_or("subscription not present")?;
 
-        let mut inputs = self
-            .inputs
-            .get(&subscription.source)
-            .ok_or("input not present")?;
-        inputs.retain(|&input| input == subscription_index);
-        self.inputs.insert(&subscription.source, &inputs);
+        if let Some(mut inputs) = self.inputs.get(&subscription.source) {
+            inputs.retain(|&input| input == subscription_index);
+            self.inputs.insert(&subscription.source, &inputs);
+        }
 
-        let mut outputs = self
-            .outputs
-            .get(&subscription.destination)
-            .ok_or("output not present")?;
-
-        outputs.retain(|&output| output == subscription_index);
-        self.outputs.insert(&subscription.source, &outputs);
+        if let Some(mut outputs) = self.outputs.get(&subscription.destination) {
+            outputs.retain(|&output| output == subscription_index);
+            self.outputs.insert(&subscription.source, &outputs);
+        }
 
         Ok(subscription)
     }
 
-    pub fn indices(&self, account_id: AccountId) -> Result<Vec<SubscriptionIndex>, &'static str> {
-        let mut inputs = self.inputs.get(&account_id).ok_or("inputs for account")?;
-        let mut outputs = self.outputs.get(&account_id).ok_or("outpus for account")?;
+    pub fn indices(&self, account_id: AccountId) -> Vec<SubscriptionIndex> {
+        let mut inputs = self.inputs.get(&account_id).unwrap_or_default();
+        let mut outputs = self.outputs.get(&account_id).unwrap_or_default();
         inputs.append(&mut outputs);
-        Ok(inputs)
+        inputs
     }
 
     pub fn index(
@@ -265,9 +260,7 @@ impl Paystream {
     }
 
     pub fn subscriptions_by_account(&self) -> Vec<SubscriptionIndex> {
-        self.subscriptions
-            .indices(env::signer_account_id())
-            .unwrap()
+        self.subscriptions.indices(env::signer_account_id())
     }
 
     pub fn get_subscription(&self, subscription_index: SubscriptionIndex) -> Subscription {
@@ -549,5 +542,54 @@ mod tests {
         let context = get_context(accounts(1));
         testing_env!(context.build());
         let _contract = Paystream::default();
+    }
+
+    #[test]
+    #[should_panic(expected = "subscription not present")]
+    fn test_livecycle_of_subscription() {
+        let mut context = get_context(accounts(1));
+        let block_timestamp = 10;
+        let rate = 100;
+        testing_env!(context.block_timestamp(block_timestamp).build());
+        let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
+        let subscription = contract.add_subscription(accounts(1), accounts(2), rate);
+        assert_eq!(subscription.source, accounts(1));
+        assert_eq!(subscription.destination, accounts(2));
+        assert_eq!(subscription.rate, rate);
+        assert_eq!(subscription.timestamp, block_timestamp);
+
+        let subscriptions = contract.subscriptions_by_account();
+        let new_subscription = contract.get_subscription(subscriptions[0]);
+        assert_eq!(
+            new_subscription, subscription,
+            "what is created isn't what is stored"
+        );
+
+        let updated_subscription = contract.update_subscription(subscriptions[0], 200);
+        assert_eq!(
+            updated_subscription.rate, 200,
+            "rate should have been updated"
+        );
+
+        contract.remove_subscription(subscriptions[0]);
+        contract.get_subscription(subscriptions[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "source must not be destination")]
+    fn test_should_fail_source_must_not_be_destination() {
+        let context = get_context(accounts(1));
+        testing_env!(context.build());
+        let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
+        contract.add_subscription(accounts(1), accounts(1), 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "rate needs to be greater than zero")]
+    fn test_rate_needs_to_be_greater_than_zero() {
+        let context = get_context(accounts(1));
+        testing_env!(context.build());
+        let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
+        contract.add_subscription(accounts(1), accounts(2), 0);
     }
 }
