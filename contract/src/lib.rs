@@ -85,13 +85,13 @@ impl Subscriptions {
         self.subscriptions.contains_key(&subscription_index)
     }
 
-    pub fn get(&self, subscription_index: SubscriptionIndex) -> Result<Subscription, &'static str> {
+    pub fn try_get(&self, subscription_index: SubscriptionIndex) -> Result<Subscription, &'static str> {
         self.subscriptions
             .get(&subscription_index)
             .ok_or("subscription not present")
     }
 
-    pub fn remove(
+    pub fn try_remove(
         &mut self,
         subscription_index: SubscriptionIndex,
     ) -> Result<Subscription, &'static str> {
@@ -120,7 +120,7 @@ impl Subscriptions {
         inputs
     }
 
-    pub fn index(
+    pub fn try_index(
         &self,
         subscription_index: SubscriptionIndex,
     ) -> Result<Subscription, &'static str> {
@@ -129,12 +129,12 @@ impl Subscriptions {
             .ok_or("subscription not present")
     }
 
-    fn update(
+    fn try_update(
         &mut self,
         subscription_index: SubscriptionIndex,
         new_flow: YoctoPerSecond,
     ) -> Result<Subscription, &'static str> {
-        let mut subscription = self.get(subscription_index)?;
+        let mut subscription = self.try_get(subscription_index)?;
         subscription.rate = new_flow;
         self.subscriptions
             .insert(&self.subscription_index, &subscription)
@@ -250,13 +250,13 @@ impl Paystream {
     }
 
     pub fn remove_subscription(&mut self, subscription_index: SubscriptionIndex) -> Subscription {
-        let subscription = self.subscriptions.get(subscription_index).unwrap();
+        let subscription = self.subscriptions.try_get(subscription_index).unwrap();
         require!(
             subscription.source == env::signer_account_id()
                 || subscription.destination == env::signer_account_id(),
             "signer must be source or destination"
         );
-        self.subscriptions.remove(subscription_index).unwrap()
+        self.subscriptions.try_remove(subscription_index).unwrap()
     }
 
     pub fn subscriptions_by_account(&self) -> Vec<SubscriptionIndex> {
@@ -264,7 +264,7 @@ impl Paystream {
     }
 
     pub fn get_subscription(&self, subscription_index: SubscriptionIndex) -> Subscription {
-        self.subscriptions.get(subscription_index).unwrap()
+        self.subscriptions.try_get(subscription_index).unwrap()
     }
 
     pub fn update_subscription(
@@ -273,7 +273,7 @@ impl Paystream {
         new_flow: YoctoPerSecond,
     ) -> Subscription {
         self.subscriptions
-            .update(subscription_index, new_flow)
+            .try_update(subscription_index, new_flow)
             .unwrap()
     }
 }
@@ -378,7 +378,7 @@ impl Paystream {
             .unwrap_or_default()
             .iter()
             .for_each(|subscription_index| {
-                if let Ok(subscription) = self.subscriptions.get(*subscription_index) {
+                if let Ok(subscription) = self.subscriptions.try_get(*subscription_index) {
                     balance = balance.saturating_add(yoctos_per_second(&subscription));
                 }
             });
@@ -390,7 +390,7 @@ impl Paystream {
             .unwrap_or_default()
             .iter()
             .for_each(|subscription_index| {
-                if let Ok(subscription) = self.subscriptions.get(*subscription_index) {
+                if let Ok(subscription) = self.subscriptions.try_get(*subscription_index) {
                     // TODO check here the reserve amount??  Maybe it won't matter but to be sure
                     balance = balance.saturating_sub(yoctos_per_second(&subscription));
                 }
