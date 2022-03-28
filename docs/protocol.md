@@ -36,8 +36,8 @@ fn remove_subscription(
 	- [x] Calculate total of outputs
 	- [x] Calculate net for balance
 - [x] Update subscription
-	- [ ] Update flow only ::assert:: if the same
-	- [ ] Settle based on old flow
+	- [x] Update flow only ::assert:: if the same
+	- [x] Settle based on old flow
 
 ```rust
 fn update_subscription(
