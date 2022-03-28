@@ -303,6 +303,9 @@ impl Paystream {
         subscription_index: SubscriptionIndex,
         new_flow: YoctoPerSecond,
     ) -> Subscription {
+        let mut subscription = self.subscriptions.try_get(subscription_index).unwrap();
+        let amount = subscription.settle();
+        self.try_transfer(subscription.source, subscription.destination, amount).unwrap();
         self.subscriptions
             .try_update(subscription_index, new_flow)
             .unwrap()
