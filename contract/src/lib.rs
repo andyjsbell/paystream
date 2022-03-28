@@ -4,7 +4,8 @@ use near_contract_standards::fungible_token::{
     resolver::FungibleTokenResolver,
     FungibleToken,
 };
-use near_sdk::json_types::U128;
+use near_sdk::{json_types::U128};
+use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::{
     borsh::{self, BorshDeserialize, BorshSerialize},
     PromiseOrValue,
@@ -31,7 +32,8 @@ type SubscriptionIndex = u64;
 type YoctoPerSecond = u128;
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde")] 
 pub struct Subscription {
     source: AccountId,
     destination: AccountId,
