@@ -39,6 +39,17 @@ pub struct Subscription {
     timestamp: u64,
 }
 
+impl Subscription {
+    /// Settle the subscription returning the amount to settle
+    pub fn settle(&mut self) -> Balance {
+        let timestamp = env::block_timestamp();
+        let time_spent = timestamp.saturating_sub(self.timestamp);
+        let amount = (time_spent as u128).saturating_mul(self.rate);
+        self.timestamp = timestamp;
+        amount
+    }
+}
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Subscriptions {
@@ -85,7 +96,10 @@ impl Subscriptions {
         self.subscriptions.contains_key(&subscription_index)
     }
 
-    pub fn try_get(&self, subscription_index: SubscriptionIndex) -> Result<Subscription, &'static str> {
+    pub fn try_get(
+        &self,
+        subscription_index: SubscriptionIndex,
+    ) -> Result<Subscription, &'static str> {
         self.subscriptions
             .get(&subscription_index)
             .ok_or("subscription not present")
@@ -256,7 +270,21 @@ impl Paystream {
                 || subscription.destination == env::signer_account_id(),
             "signer must be source or destination"
         );
-        self.subscriptions.try_remove(subscription_index).unwrap()
+
+        let mut subscription = self
+            .subscriptions
+            .try_remove(subscription_index)
+            .expect("subscription is removed");
+
+        let amount = subscription.settle();
+        self.try_transfer(
+            subscription.source.clone(),
+            subscription.destination.clone(),
+            amount,
+        )
+        .expect("transfer on settlement");
+
+        subscription
     }
 
     pub fn subscriptions_by_account(&self) -> Vec<SubscriptionIndex> {
@@ -362,11 +390,35 @@ impl Paystream {
 }
 
 impl Paystream {
+    fn try_transfer(
+        &mut self,
+        source: AccountId,
+        destination: AccountId,
+        amount: Balance,
+    ) -> Result<(), &'static str> {
+        let balance_of_source = self.balances.get(&source).ok_or("source doesn't exist")?;
+        let new_balance_of_source = balance_of_source
+            .checked_sub(amount)
+            .ok_or("insufficient balance")?;
+
+        self.balances.insert(&source, &new_balance_of_source);
+
+        match self.balances.get(&destination) {
+            Some(current_balance) => self
+                .balances
+                .insert(&destination, &current_balance.saturating_add(amount)),
+            None => self.balances.insert(&destination, &amount),
+        };
+
+        Ok(())
+    }
+
     fn current_balance(&self, account_id: AccountId) -> U128 {
         let mut balance = self.balances.get(&account_id).unwrap_or_default();
         // All incoming where account is destination
         let timestamp = env::block_timestamp();
 
+        // TODO Naming could be better here
         let yoctos_per_second = |subscription: &Subscription| -> u128 {
             let difference = timestamp.saturating_sub(subscription.timestamp);
             (difference as u128).saturating_mul(subscription.rate)
