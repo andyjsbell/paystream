@@ -22,7 +22,7 @@ fn add_subscription(
 - [ ] Remove subscription
 	- [x] Subscription index ::assert::
 	- [x] Available to source and destination ::assert:: 
-	- [ ] Settle balance by transfer of near to account
+	- [x] Settle balance by transfer of near to account
 
 ```rust
 fn remove_subscription(
@@ -35,7 +35,7 @@ fn remove_subscription(
 	- [x] Calculate total of inputs
 	- [x] Calculate total of outputs
 	- [x] Calculate net for balance
-- [ ] Update subscription
+- [x] Update subscription
 	- [ ] Update flow only ::assert:: if the same
 	- [ ] Settle based on old flow
 
