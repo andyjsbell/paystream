@@ -149,6 +149,9 @@ impl Subscriptions {
         new_flow: YoctoPerSecond,
     ) -> Result<Subscription, &'static str> {
         let mut subscription = self.try_get(subscription_index)?;
+        if subscription.rate == new_flow {
+            return Err("flow must be different");
+        }
         subscription.rate = new_flow;
         self.subscriptions
             .insert(&self.subscription_index, &subscription)
