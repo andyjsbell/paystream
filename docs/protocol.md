@@ -1,7 +1,7 @@
 # Protocol
 - [ ] Add subscription
 	- [x] Source, destination and rate
-	- [ ] Confirm reserve is sufficient ::assert::
+	- [x] Confirm reserve is sufficient ::assert::
 	- [x] All subscriptions are outgoing
 	- [x] Increment subscription index by one
 	- [x] Insert subscription into subscription map
