@@ -4,8 +4,8 @@ use near_contract_standards::fungible_token::{
     resolver::FungibleTokenResolver,
     FungibleToken,
 };
-use near_sdk::{json_types::U128};
-use near_sdk::serde::{Serialize, Deserialize};
+use near_sdk::json_types::U128;
+use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
     borsh::{self, BorshDeserialize, BorshSerialize},
     PromiseOrValue,
@@ -29,16 +29,17 @@ enum StorageKey {
 }
 
 type SubscriptionIndex = u64;
-type YoctoPerSecond = u128;
+type YoctosPerSecond = u128;
+type Seconds = u64;
 
 #[near_bindgen]
 #[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-#[serde(crate = "near_sdk::serde")] 
+#[serde(crate = "near_sdk::serde")]
 pub struct Subscription {
     source: AccountId,
     destination: AccountId,
-    rate: YoctoPerSecond,
-    timestamp: u64,
+    rate: YoctosPerSecond,
+    timestamp: Seconds,
 }
 
 impl Subscription {
@@ -70,7 +71,7 @@ impl Subscriptions {
         &mut self,
         source: AccountId,
         destination: AccountId,
-        rate: YoctoPerSecond,
+        rate: YoctosPerSecond,
     ) -> Subscription {
         self.subscription_index = self.subscription_index.wrapping_add(1);
 
@@ -148,7 +149,7 @@ impl Subscriptions {
     fn try_update(
         &mut self,
         subscription_index: SubscriptionIndex,
-        new_flow: YoctoPerSecond,
+        new_flow: YoctosPerSecond,
     ) -> Result<Subscription, &'static str> {
         let mut subscription = self.try_get(subscription_index)?;
         if subscription.rate == new_flow {
@@ -177,6 +178,8 @@ pub struct Paystream {
     treasurer: AccountId,
     /// Subscriptions
     subscriptions: Subscriptions,
+    /// Reserve required for subscription
+    reserve: Seconds,
 }
 
 // sNEAR fungible token
@@ -253,18 +256,36 @@ impl Paystream {
     }
 }
 
-// Subscriptions
 #[near_bindgen]
 impl Paystream {
+    fn sufficient_reserve(&self, rate: YoctosPerSecond, account_id: &AccountId) {
+        let minimum_balance = rate.saturating_mul(self.reserve as u128);
+        let current_balance = self
+            .balances
+            .get(account_id)
+            .expect("that source has balance");
+        require!(
+            current_balance > minimum_balance,
+            "sufficient reserve is required"
+        );
+    }
+
+    pub fn update_reserve(&mut self, reserve: Seconds) {
+        Self::required(self.owner());
+        self.reserve = reserve;
+    }
+
     pub fn add_subscription(
         &mut self,
         source: AccountId,
         destination: AccountId,
-        rate: YoctoPerSecond,
+        rate: YoctosPerSecond,
     ) -> Subscription {
         require!(rate > 0, "rate needs to be greater than zero");
+        require!(source == env::signer_account_id(), "signer must be source");
         require!(source != destination, "source must not be destination");
-
+        self.sufficient_reserve(rate, &source);
+        // Validate that we have enough in the account to create the subscription(reserve)
         self.subscriptions.create(source, destination, rate)
     }
 
@@ -303,11 +324,12 @@ impl Paystream {
     pub fn update_subscription(
         &mut self,
         subscription_index: SubscriptionIndex,
-        new_flow: YoctoPerSecond,
+        new_flow: YoctosPerSecond,
     ) -> Subscription {
         let mut subscription = self.subscriptions.try_get(subscription_index).unwrap();
         let amount = subscription.settle();
-        self.try_transfer(subscription.source, subscription.destination, amount).unwrap();
+        self.try_transfer(subscription.source, subscription.destination, amount)
+            .unwrap();
         self.subscriptions
             .try_update(subscription_index, new_flow)
             .unwrap()
@@ -345,6 +367,7 @@ impl Paystream {
                 outputs: LookupMap::new(StorageKey::Outputs),
                 inputs: LookupMap::new(StorageKey::Inputs),
             },
+            reserve: 4 * 60 * 60, // 4 hours
         };
 
         this.token.internal_register_account(&owner);
@@ -612,6 +635,7 @@ mod tests {
         let rate = 100;
         testing_env!(context.block_timestamp(block_timestamp).build());
         let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
+        contract.balances.insert(&accounts(1), &1_000_000_000);
         let subscription = contract.add_subscription(accounts(1), accounts(2), rate);
         assert_eq!(subscription.source, accounts(1));
         assert_eq!(subscription.destination, accounts(2));
