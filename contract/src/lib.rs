@@ -17,7 +17,7 @@ use near_sdk::{
 use near_sdk::{env, log, near_bindgen, require, AccountId, Balance, BorshStorageKey, Promise};
 use near_sdk::{ext_contract, PromiseResult};
 
-// https://stackoverflow.com/questions/69096013/how-can-i-serialize-a-near-sdk-rs-lookupmap-that-uses-a-string-as-a-key-or-is-t
+/// Storage keys
 #[derive(BorshSerialize, BorshStorageKey)]
 enum StorageKey {
     FungibleToken,
@@ -28,17 +28,25 @@ enum StorageKey {
     Inputs,
 }
 
+/// An index for a subscription
 type SubscriptionIndex = u64;
+/// A rate of yoctos per second
 type YoctosPerSecond = u128;
+/// Seconds
 type Seconds = u64;
 
+/// A Subscription which has a source account which will stream at rate from timestamp to the source account
 #[near_bindgen]
 #[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize, Debug, PartialEq)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Subscription {
+    /// Source account
     source: AccountId,
+    /// Destination account
     destination: AccountId,
-    rate: YoctosPerSecond,
+    /// Rate of stream
+    flow: YoctosPerSecond,
+    /// The start time of the stream
     timestamp: Seconds,
 }
 
@@ -47,12 +55,13 @@ impl Subscription {
     pub fn settle(&mut self) -> Balance {
         let timestamp = env::block_timestamp();
         let time_spent = timestamp.saturating_sub(self.timestamp);
-        let amount = (time_spent as u128).saturating_mul(self.rate);
+        let amount = (time_spent as u128).saturating_mul(self.flow);
         self.timestamp = timestamp;
         amount
     }
 }
 
+/// Subscriptions for the Paystream contract
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Subscriptions {
@@ -66,19 +75,42 @@ pub struct Subscriptions {
     pub inputs: LookupMap<AccountId, Vec<SubscriptionIndex>>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+pub enum SubscriptionError {
+    NotPresent(SubscriptionIndex),
+    InvalidFlow(YoctosPerSecond),
+    InternalError,
+}
+
+impl std::fmt::Debug for SubscriptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotPresent(subscription_index) => {
+                write!(f, "Subscription [{}] not present", subscription_index)
+            }
+            Self::InvalidFlow(yoctos_per_second) => write!(f, "InvalidFlow {}", yoctos_per_second),
+            Self::InternalError => write!(f, "An internal error has occurred"),
+        }
+    }
+}
+
+type SubscriptionResult = Result<Subscription, SubscriptionError>;
+
 impl Subscriptions {
+    /// Create a new subscription
     pub fn create(
         &mut self,
         source: AccountId,
         destination: AccountId,
-        rate: YoctosPerSecond,
+        flow: YoctosPerSecond,
     ) -> Subscription {
         self.subscription_index = self.subscription_index.wrapping_add(1);
 
         let subscription = Subscription {
             source: source.clone(),
             destination: destination.clone(),
-            rate,
+            flow,
             timestamp: env::block_timestamp(),
         };
         self.subscriptions
@@ -95,27 +127,29 @@ impl Subscriptions {
         subscription
     }
 
+    /// If a subscription with the subscription index exists
     pub fn exists(&self, subscription_index: SubscriptionIndex) -> bool {
         self.subscriptions.contains_key(&subscription_index)
     }
 
-    pub fn try_get(
-        &self,
-        subscription_index: SubscriptionIndex,
-    ) -> Result<Subscription, &'static str> {
-        self.subscriptions
-            .get(&subscription_index)
-            .ok_or("subscription not present")
+    /// Get a subscription by index
+    pub fn get(&self, subscription_index: SubscriptionIndex) -> Option<Subscription> {
+        self.subscriptions.get(&subscription_index)
     }
 
-    pub fn try_remove(
-        &mut self,
-        subscription_index: SubscriptionIndex,
-    ) -> Result<Subscription, &'static str> {
+    /// Try to get a subscription
+    pub fn try_get(&self, subscription_index: SubscriptionIndex) -> SubscriptionResult {
+        self.subscriptions
+            .get(&subscription_index)
+            .ok_or(SubscriptionError::NotPresent(subscription_index))
+    }
+
+    /// Try to remove a subscription
+    pub fn try_remove(&mut self, subscription_index: SubscriptionIndex) -> SubscriptionResult {
         let subscription = self
             .subscriptions
             .remove(&subscription_index)
-            .ok_or("subscription not present")?;
+            .ok_or(SubscriptionError::NotPresent(subscription_index))?;
 
         if let Some(mut inputs) = self.inputs.get(&subscription.source) {
             inputs.retain(|&input| input == subscription_index);
@@ -130,55 +164,57 @@ impl Subscriptions {
         Ok(subscription)
     }
 
-    pub fn indices(&self, account_id: AccountId) -> Vec<SubscriptionIndex> {
+    /// Subscriptions for an account
+    pub fn subscriptions_for_account(&self, account_id: AccountId) -> Vec<SubscriptionIndex> {
         let mut inputs = self.inputs.get(&account_id).unwrap_or_default();
         let mut outputs = self.outputs.get(&account_id).unwrap_or_default();
         inputs.append(&mut outputs);
         inputs
     }
 
-    pub fn try_index(
-        &self,
-        subscription_index: SubscriptionIndex,
-    ) -> Result<Subscription, &'static str> {
-        self.subscriptions
-            .get(&subscription_index)
-            .ok_or("subscription not present")
-    }
-
+    /// Try to update the subscription with a new flow
     fn try_update(
         &mut self,
         subscription_index: SubscriptionIndex,
         new_flow: YoctosPerSecond,
-    ) -> Result<Subscription, &'static str> {
+    ) -> SubscriptionResult {
         let mut subscription = self.try_get(subscription_index)?;
-        if subscription.rate == new_flow {
-            return Err("flow must be different");
+        if subscription.flow == new_flow {
+            return Err(SubscriptionError::InvalidFlow(new_flow));
         }
-        subscription.rate = new_flow;
+        subscription.flow = new_flow;
         self.subscriptions
             .insert(&self.subscription_index, &subscription)
-            .ok_or("unable to update subscription")?;
+            .ok_or(SubscriptionError::InternalError)?;
+
         Ok(subscription)
     }
 }
 
+/// Paystream
+/// Wraps a token with which forms the basis of value for all subscriptions.
+/// At present this supports wNEAR only and the contract wraps this token providing
+/// a token sNEAR.
+/// Accounts would deposit wNEAR in order to meet the reserve requirements
+/// in order to create subscriptions.
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Paystream {
+    /// The contract for wNEAR
     wrap_contract: AccountId,
+    /// The token, in this case sNEAR
     token: FungibleToken,
+    /// Meta data for the token sNEAR
     metadata: LazyOption<FungibleTokenMetadata>,
-    /// Balances of streams
+    /// Balances of streams in sNEAR
     balances: LookupMap<AccountId, Balance>,
-    /// The owner of the account
+    /// The owner of the contract
     owner: AccountId,
     /// The treasury controlling account
-    /// wNEAR would be assigned to this account
     treasurer: AccountId,
     /// Subscriptions
     subscriptions: Subscriptions,
-    /// Reserve required for subscription
+    /// Reserve required for subscription in seconds
     reserve: Seconds,
 }
 
@@ -208,6 +244,7 @@ pub trait Callbacks {
     fn wrap_callback(&mut self, account_id: AccountId, amount: Balance);
 }
 
+/// Permissions based on account
 trait Permission {
     fn required(account_id: &AccountId);
 }
@@ -258,6 +295,7 @@ impl Paystream {
 
 #[near_bindgen]
 impl Paystream {
+    /// Calculate the reserve we would need to be able to create a subscription
     fn sufficient_reserve(&self, rate: YoctosPerSecond, account_id: &AccountId) {
         let minimum_balance = rate.saturating_mul(self.reserve as u128);
         let current_balance = self
@@ -270,12 +308,15 @@ impl Paystream {
         );
     }
 
+    /// Update the reserve stored in the contract, owner gated
     pub fn update_reserve(&mut self, reserve: Seconds) {
         Self::required(self.owner());
         self.reserve = reserve;
     }
 
-    pub fn add_subscription(
+    /// Create a subscription.  If the subscription meets the reserve requirements for the signer
+    /// we create it and payment started from this moment.
+    pub fn create_subscription(
         &mut self,
         source: AccountId,
         destination: AccountId,
@@ -284,11 +325,14 @@ impl Paystream {
         require!(rate > 0, "rate needs to be greater than zero");
         require!(source == env::signer_account_id(), "signer must be source");
         require!(source != destination, "source must not be destination");
-        self.sufficient_reserve(rate, &source);
         // Validate that we have enough in the account to create the subscription(reserve)
+        self.sufficient_reserve(rate, &source);
         self.subscriptions.create(source, destination, rate)
     }
 
+    /// Remove subscription.  The signer maybe the source or destination of the subscription.
+    /// On removal the stream is settled at this moment in time, the stream from then would have
+    /// stopped. 
     pub fn remove_subscription(&mut self, subscription_index: SubscriptionIndex) -> Subscription {
         let subscription = self.subscriptions.try_get(subscription_index).unwrap();
         require!(
@@ -313,14 +357,18 @@ impl Paystream {
         subscription
     }
 
+    /// Subscriptions for the signing account
     pub fn subscriptions_by_account(&self) -> Vec<SubscriptionIndex> {
-        self.subscriptions.indices(env::signer_account_id())
+        self.subscriptions.subscriptions_for_account(env::signer_account_id())
     }
 
+    /// A subscription by index
     pub fn get_subscription(&self, subscription_index: SubscriptionIndex) -> Subscription {
         self.subscriptions.try_get(subscription_index).unwrap()
     }
 
+    /// Update the flow of the subscription.  Changing the flow will force the stream to be settled
+    /// at this point in time and from then the new flow will take effect.
     pub fn update_subscription(
         &mut self,
         subscription_index: SubscriptionIndex,
@@ -338,6 +386,7 @@ impl Paystream {
 
 #[near_bindgen]
 impl Paystream {
+    /// Create the paystream contract with the wrapped token contract wNEAR
     #[init]
     pub fn new(owner: AccountId, wrap_contract: AccountId) -> Self {
         require!(!env::state_exists(), "Already initialized");
@@ -421,6 +470,7 @@ impl Paystream {
 }
 
 impl Paystream {
+    /// Try to transfer an amount of sNEAR from source to destination
     fn try_transfer(
         &mut self,
         source: AccountId,
@@ -444,6 +494,7 @@ impl Paystream {
         Ok(())
     }
 
+    /// Calculate the current balance in sNEAR for the account
     fn current_balance(&self, account_id: AccountId) -> U128 {
         let mut balance = self.balances.get(&account_id).unwrap_or_default();
         // All incoming where account is destination
@@ -452,7 +503,7 @@ impl Paystream {
         // TODO Naming could be better here
         let yoctos_per_second = |subscription: &Subscription| -> u128 {
             let difference = timestamp.saturating_sub(subscription.timestamp);
-            (difference as u128).saturating_mul(subscription.rate)
+            (difference as u128).saturating_mul(subscription.flow)
         };
 
         self.subscriptions
@@ -632,14 +683,14 @@ mod tests {
     fn test_livecycle_of_subscription() {
         let mut context = get_context(accounts(1));
         let block_timestamp = 10;
-        let rate = 100;
+        let flow = 100;
         testing_env!(context.block_timestamp(block_timestamp).build());
         let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
         contract.balances.insert(&accounts(1), &1_000_000_000);
-        let subscription = contract.add_subscription(accounts(1), accounts(2), rate);
+        let subscription = contract.create_subscription(accounts(1), accounts(2), flow);
         assert_eq!(subscription.source, accounts(1));
         assert_eq!(subscription.destination, accounts(2));
-        assert_eq!(subscription.rate, rate);
+        assert_eq!(subscription.flow, flow);
         assert_eq!(subscription.timestamp, block_timestamp);
 
         let subscriptions = contract.subscriptions_by_account();
@@ -651,7 +702,7 @@ mod tests {
 
         let updated_subscription = contract.update_subscription(subscriptions[0], 200);
         assert_eq!(
-            updated_subscription.rate, 200,
+            updated_subscription.flow, 200,
             "rate should have been updated"
         );
 
@@ -665,7 +716,7 @@ mod tests {
         let context = get_context(accounts(1));
         testing_env!(context.build());
         let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
-        contract.add_subscription(accounts(1), accounts(1), 100);
+        contract.create_subscription(accounts(1), accounts(1), 100);
     }
 
     #[test]
@@ -674,6 +725,6 @@ mod tests {
         let context = get_context(accounts(1));
         testing_env!(context.build());
         let mut contract = Paystream::new(accounts(0), WRAP_CONTRACT.parse().unwrap());
-        contract.add_subscription(accounts(1), accounts(2), 0);
+        contract.create_subscription(accounts(1), accounts(2), 0);
     }
 }
